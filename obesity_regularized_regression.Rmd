@@ -1,5 +1,5 @@
 ---
-title: "MAST7220 Assesment"
+title: "Obesity Prevalence Analysis with Ridge and Lasso Regression"
 output:
   html_document: default
   pdf_document: default
