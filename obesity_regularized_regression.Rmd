@@ -1,0 +1,573 @@
+---
+title: "MAST7220 Assesment"
+output:
+  html_document: default
+  pdf_document: default
+date: "2025-02-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, eval = FALSE)
+
+```
+
+
+
+## Introduction
+This analysis focuses on examining `obesity prevalence` using various health indicators. The main objective is to develop and compare regularization methods (Ridge and Lasso regression) to address `multicollinearity` issues in the dataset while maintaining predictive accuracy.
+
+
+## Examination of the Data
+Loading the data from csv using `read.csv()` preparing it for analysis.
+
+```{r,echo=TRUE, eval=TRUE, message=FALSE, comment=NA, fig.height=4, fig.cap="vertical legend"}
+data <- read.csv("IntOrg_NCD_variables_2024_02_02.csv", stringsAsFactors = FALSE)
+names(data)
+
+```
+
+First, we check the dataset's dimensions and structure.
+
+```{r,echo=TRUE, eval=TRUE, message=FALSE, comment=NA, fig.height=4, fig.cap="vertical legend"}
+dim(data)
+str(data)
+summary(data)
+
+```
+The data has 21 variables and 16800 observations. 5 variables are categorical, 1 variable is integer and the others are numerical. With using `summary()` function, we can obverse that the dataset have missing values.
+
+```{r,fig.cap="",fig.height=7,echo=TRUE, eval=TRUE, message=FALSE, comment=NA, fig.height=6}
+
+library(naniar)
+library(ggplot2)
+
+vis_miss(data) +
+  theme(
+    axis.text.x = element_text(angle = 270,  
+                              hjust = 1,     
+                              vjust = 1,     
+                              size = 8))
+
+```
+
+This plot indicates the distribution of missing values across all variables. Most variables are complete, however; such as `Diabetes_prevalence`and some other variables have missing values. Overall, 1.7% of the data is missing.
+
+## Filling the empty cells
+
+The for loop was generated to fill missing values with the most frequent value for categorical variables and integers, and the mean for numerical variables.
+
+
+```{r , message=FALSE, eval=TRUE, comment=NA, echo=TRUE}
+
+
+#fill the missing values
+for (col in colnames(data)) {
+  if (is.character(data[[col]])|| is.integer(data[[col]])  ) {
+    most_frequent <- names(sort(table(data[[col]]), decreasing = TRUE))[1]  
+    data[[col]][is.na(data[[col]])] <- most_frequent
+  } else if (is.numeric(data[[col]])) {
+    data[[col]][is.na(data[[col]])] <- mean(data[[col]], na.rm = TRUE)
+  }
+}
+sum(is.na(data))
+```
+After using mean and mode for NA's, the data is ready to analyse. 
+
+## Creating new dataset
+A new dataset is created by removing the `Country`, `Region`, `ISO`, `Year`  and `Superregion` columns. The dataset will be used for model development and categorical variables are switched to factor for models.
+ 
+```{r , message=FALSE, eval=TRUE, comment=NA, echo=TRUE}
+library(dplyr)   
+health_data <- data %>% 
+  select( -Country,  -Region,-ISO,-Superregion,-Year)
+
+health_data$Sex <- as.factor(health_data$Sex)
+dim(health_data)
+str(health_data)
+
+```
+
+## Outliers
+ 
+The for loop is generated to calculate the percentage of outliers using the IQR (Interquartile Range) method. The lower and upper bounds are defined as Q1 - 1.5IQR and Q3 + 1.5IQR. The number of outliers is counted, and the percentage is displayed for each variable.
+```{r , message=FALSE, eval=TRUE, comment=NA, echo=TRUE}
+for (col in colnames(data)) {
+  if (is.numeric(data[[col]]) ) {
+    Q1<- quantile(data[[col]],0.25)
+    Q3<-quantile(data[[col]],0.75)
+    IQR <- Q3-Q1
+    
+    lowerbound <- Q1 - 1.5 * IQR
+    upperbound <- Q3 + 1.5 * IQR
+    
+    count <-sum(data[[col]]<lowerbound | data[[col]]>upperbound)
+    total <- data %>% summarise(n = n()) %>% pull(n)
+    outlier_percentage <- (count / total) * 100
+    print(paste("Outliers for:", col , round(outlier_percentage, 2), "%")) 
+  }
+}
+
+```
+
+The outlier analysis results show the percentage of outliers for each numerical variable based on the IQR method. Especially, `Diabetes_prevalence`, `Prevalence_morbid_obesity_adults`, and `GDP_USD` have the highest outlier percentages.
+
+As the next step, we will create boxplots for some variables to visualize their distributions and better understand these extreme values.  
+  
+```{r fig.cap="", fig.height=5,fig.width=11,  message=FALSE, comment=NA, eval = TRUE}
+library(ggplot2)
+ggplot(health_data, aes(x = "", y = GDP_USD)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Outliers of GDO_USD") +
+  theme_minimal()
+ggplot(health_data, aes(x = "", y = Prevalence_morbid_obesity_adults)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Outliers of Prevalence_morbid_obesity_adults") +
+  theme_minimal()
+ggplot(health_data, aes(x = "", y = Diabetes_prevalence)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Outliers of Diabetes_prevalence") +
+  theme_minimal()
+```
+
+
+## Correlation
+The correlation matrix visualizes the relationships between numerical variables. Strong positive correlations are shown in red, and strong negative correlations in blue. 
+
+```{r , message=FALSE, eval=TRUE, comment=NA, echo=FALSE}
+library(corrplot)
+cor_matrix<-cor(health_data[sapply(health_data, is.numeric)])
+
+
+library(ggcorrplot)
+ggcorrplot(cor_matrix, method = "circle", lab = TRUE, lab_size = 2, tl.cex = 6, tl.srt = 40)
+
+cor_data <- as.data.frame(as.table(cor_matrix))
+
+
+cor_data <- cor_data %>%
+  filter(Var1 != Var2 & abs(Freq) > 0.85) %>%
+  arrange(desc(abs(Freq)))
+
+print(cor_data)
+
+```
+Only correlations above 0.85 are filtered for further analysis. This step helps identify multicollinearity issues, which is crucial because our dependent variable is `Prevalence_obesity_adults`.
+
+## Numerical Variable Distributions
+
+To explore the patterns and shapes of numerical variables, we will use histograms to display their value distributions. This helps identify skewness.
+
+
+```{r fig.cap="", fig.height=4, message=FALSE, comment=NA, eval = TRUE}
+library(tidyr)
+
+health_data %>%
+  select(where(is.numeric)) %>%
+  pivot_longer(cols = everything()) %>%
+  ggplot(aes(value)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  facet_wrap(~name, scales = "free") +
+  theme_minimal() +
+  theme(
+    strip.text = element_text(size = 6),  
+    axis.text.x = element_text(angle = 0, size = 8)) +
+  labs(
+    x = "Value",
+    y = "Count",
+    title = "Distribution of Numerical Variables"
+  )
+
+```
+
+This histogram grid displays the distribution of all numerical variables. Each plot shows the frequency of values with 30 bins. The scales are adjusted individually for better visualization. Some variables, such as `GDP_USD`, `Diabetes_prevalence`, and `Prevalence_obesity_adults`, show a right-skewed distribution.
+
+## Model Development
+
+The modeling process begins with an examination of multicollinearity in our dataset. Multicollinearity occurs when predictor variables are highly correlated with each other, which can lead to unstable and unreliable coefficient estimates in regression models.
+
+### Initial Variance Inflation Factor(VIF) Analysis
+Calculating VIF to detect multicollinearity in the regression model for `Prevalence_obesity_adults`. VIF values greater than 10 are generally considered problematic, indicating severe multicollinearity.[1]
+
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=TRUE}
+library(car)
+fit <- lm(Prevalence_obesity_adults ~ ., data = health_data)
+
+vif_values <- vif(fit)
+print(vif_values)
+
+
+```
+The VIF analysis reveals significant multicollinearity issues:
+- `Prevalence_overweight_children`: Highest VIF, indicating strong correlation with other predictors
+- `Prevalence_obesity_children` : Second highest VIF
+- `Mean_BMI_adults` : Also above the critical threshold of 10
+
+These high VIF values suggest that:
+- Standard linear regression results may be unreliable[1]
+- Coefficient estimates could be unstable[1]
+- Predictor importance may be misrepresented
+
+Now, we will apply Ridge and Lasso regression to address the multicollinearity issue identified through the high VIF values[2]. These regularization techniques help improve model performance by penalizing large coefficients:
+
+In order to predict the dependent variable using lasso and ridge, we need to create train and test data to avoid overfitting and accuracy.
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=TRUE}
+set.seed(123)
+ind<- sample(2, nrow(health_data),replace=TRUE, prob=c(0.7,0.3))
+train.data<-health_data[ind==1,]
+test.data<-health_data[ind==2,]
+
+X_train <- model.matrix(Prevalence_obesity_adults~ ., train.data)[, -1]  
+Y_train <- as.matrix(train.data$Prevalence_obesity_adults)
+dim(X_train)
+dim(Y_train)
+
+X_test <- model.matrix(Prevalence_obesity_adults~ ., test.data)[, -1] 
+Y_test <- as.matrix(test.data$Prevalence_obesity_adults)
+dim(X_test)
+dim(Y_test)
+
+```
+The dataset is split into training (70%) and testing (30%) sets to evaluate model performance. model.matrix() is used to create design matrices, converting categorical variables to dummy variables and excluding the intercept. X_train and X_test store the predictor variables, while Y_train and Y_test contain the target variable Prevalence_obesity_adults. This preprocessing step is important for applying Ridge and Lasso regression.
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=TRUE}
+lambda.array <- 10^seq(2, -3, length = 100) 
+```
+
+A sequence of 100 lambda values is generated on a logarithmic scale from \(10^{2}\) to \(10^{-3}\). These values represent the regularization strength for Ridge and Lasso regression models. Higher lambda values apply stronger penalties, shrinking coefficients more, while lower values result in less regularization[3]. 
+
+## RIDGE REGRESSION
+
+Ridge regression, also known as L2 regularization, is implemented to address the multicollinearity issues identified in our dataset. This method adds a penalty term, effectively shrinking the regression coefficients towards zero without eliminating any variables completely.
+
+In our implementation, we use the `glmnet` package with `alpha = 0` (specifying Ridge regression) and a sequence of lambda values to find the optimal level of regularization. The model is trained on the standardized predictors to ensure fair penalization across all variables.
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=TRUE}
+library(glmnet)
+ridgefit<- glmnet(X_train, Y_train, alpha = 0, lambda= lambda.array, family = "gaussian")
+summary(ridgefit)
+
+
+predicted_y_ridge <- predict(ridgefit, s=min(lambda.array),newx=X_test)
+predict(ridgefit, s=min(lambda.array),newx=X_test,type="coefficient")
+
+```
+
+The Ridge model is fitted using `glmnet` with `alpha = 0` for L2 regularization. We then generate predictions on the test set and examine the coefficient values using the minimum lambda value, which represents the least aggressive regularization in our sequence. The resulting coefficients show how Ridge regression has shrunk but not eliminated any predictor variables.
+
+### Cross Validation for Ridge Regression
+
+10-fold cross validation method is used in order to find the best lambda value for the model. 
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=TRUE}
+set.seed(123) 
+
+cv.ridge <- cv.glmnet(X_train, Y_train, 
+                      alpha = 0,     
+                      nfolds = 10)   # 10-fold cross validation
+
+
+best_lambda_ridge <- cv.ridge$lambda.min
+print(paste("Best lambda for Ridge Regression:", best_lambda_ridge))
+
+# Final model with best lambda
+final_ridge <- glmnet(X_train, Y_train, 
+                      alpha = 0, 
+                      lambda = best_lambda_ridge)
+
+# Prediction using test data
+ridge_pred <- predict(final_ridge, newx = X_test)
+
+
+sst_ridge<-sum((Y_test-mean(Y_test))^2)
+sse_ridge<-sum((ridge_pred-Y_test)^2)
+r_square_ridge <- 1-(sse_ridge/sst_ridge)
+r_square_ridge
+
+
+mse_ridge<-(sum((ridge_pred-Y_test)^2)/length(ridge_pred))
+mse_ridge
+```
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=FALSE}
+print(paste("The Ridge model is optimized using 10-fold cross-validation to find the best lambda value. The final model is then fitted using this optimal lambda and evaluated on the test set. Performance metrics show strong predictive power with an R-squared value of ", round(r_square_ridge,2) , "showing that the model explains approximately", round(((r_square_ridge)*100),2) ,"% of the variance in obesity prevalence." ))
+```
+
+
+A scatter plot is created to compare the actual and predicted values from the Ridge regression model. Each point represents a prediction, with blue points indicating predicted values against their actual values. A red dashed line with a slope of 1 is added to represent the perfect prediction where actual values are equal to predicted values. The closer the points are to this line, the better the model's performance. 
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=FALSE}
+results_df_ridge <- data.frame(
+  Actual = as.numeric(Y_test),       
+  Predicted = as.numeric(ridge_pred) 
+)
+
+ggplot(results_df_ridge, aes(x = Actual, y = Predicted)) +
+  geom_point(color = "blue", alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, col = "red", linetype = "dashed") +
+  labs(
+    title = "Actual vs Predicted Scores",
+    x = "Actual Score", 
+    y = "Predicted Score"
+  ) +
+  theme_minimal()
+```
+
+
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=FALSE}
+
+
+# VIF Value for Ridge Regression
+ridge_coef <- coef(final_ridge)  # Coefficients of final ridge model
+ridge_features <- rownames(ridge_coef)[-1]  # remove the intercept
+X_ridge <- X_train[, ridge_features]  # take the included-variables.
+
+
+ridge_data <- data.frame(
+  Y = Y_train,
+  X_ridge
+)
+
+ridge_lm <- lm(Y ~ ., data = ridge_data)
+vif_values_ridge <- vif(ridge_lm)
+print("Ridge Regression VIF values:")
+print(vif_values_ridge)
+
+```
+The Ridge model's coefficients are extracted, and only variables with non-zero values are selected. A new linear model is then fitted using these selected predictors to assess their contribution. However, it's important to note that while Ridge regression has some effect of VIF values, several predictors still show concerning levels of multicollinearity:
+
+This persistent high multicollinearity suggests that while Ridge regression has helped stabilize the model, it hasn't completely resolved the multicollinearity issues. 
+
+## LASSO REGRESSION
+The Lasso regression model is trained with L1 regularization. `summary()` shows the selected features for different lambda values, highlighting Lasso’s feature selection ability.
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=TRUE}
+lassofit<- glmnet(X_train, Y_train, alpha = 1, lambda= lambda.array, family = "gaussian")
+summary(lassofit)
+
+predicted_y_lasso <- predict(lassofit, s=min(lambda.array),newx=X_test)
+
+predict(lassofit, s=min(lambda.array),newx=X_test,type="coefficient")
+```
+
+For Lasso regression, alpha value is set to 1 (unlike 0 in Ridge Regression). This indicates that Lasso can shrink some coefficients exactly to zero, which is beneficial for the model as it effectively removes unnecessary variables and helps address multicollinearity by eliminating redundant predictors that have strong linear relationships with each other.
+
+### Cross Validation For Lasso Regression
+
+The Lasso model is optimized using 10-fold cross-validation to prevent overfitting. Cross-validation helps find the optimal lambda value by splitting the data into 10 subsets, training the model on 9 parts and validating on the remaining part, rotating through all combinations. We use `lambda.1se` (one standard error rule) instead of `lambda.min` to select a less aggressive model that favors simplicity while maintaining predictive accuracy.
+
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=TRUE}
+set.seed(123)
+cv.lasso <- cv.glmnet(X_train, Y_train, 
+                      alpha = 1,     # alpha = 1
+                      nfolds = 10)   # 10-fold cross validation
+
+best_lambda_lasso <- cv.lasso$lambda.1se
+print(paste("Best lambda for lasso regression:", best_lambda_lasso))
+
+final_lasso <- glmnet(X_train, Y_train, 
+                      alpha = 1, 
+                      lambda = best_lambda_lasso)
+
+lasso_pred <- predict(final_lasso, newx = X_test)
+
+
+sst_lasso<-sum((Y_test-mean(Y_test))^2)
+sse_lasso<-sum((lasso_pred-Y_test)^2)
+r_square_lasso <- 1-(sse_lasso/sst_lasso)
+r_square_lasso
+
+
+mse_lasso<-(sum((lasso_pred-Y_test)^2)/length(lasso_pred))
+mse_lasso
+
+```
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=FALSE}
+print(paste("The model achieves an R-squared value of", round(r_square_lasso,2) , "explaining approximately", round(((r_square_lasso)*100),2) ,"% of the variance in obesity prevalence. The low MSE ", round(mse_lasso,6), " further confirms the model's strong predictive performance while maintaining the advantage of variable selection through L1 regularization." ))
+```
+
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=FALSE}
+
+results_df_lasso <- data.frame(
+  Actual = as.numeric(Y_test),       
+  Predicted = as.numeric(lasso_pred) 
+)
+
+ggplot(results_df_lasso, aes(x = Actual, y = Predicted)) +
+  geom_point(color = "blue", alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, col = "red", linetype = "dashed") +
+  labs(
+    title = "Actual vs Predicted Scores",
+    x = "Actual Score", 
+    y = "Predicted Score"
+  ) +
+  theme_minimal()
+```
+
+A scatter plot is created to compare the actual and predicted values from the Lasso regression model. Each blue point represents a prediction, with actual values on the x-axis and predicted values on the y-axis. The red dashed line represents the perfect prediction line (y=x) where actual values equal predicted values. The close alignment of points along this line indicates strong predictive accuracy.
+
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=FALSE}
+# Vif Values for Lasso Regression
+lasso_coef <- predict(lassofit, s = min(lambda.array), type = "coefficients")
+lasso_coef <- as.matrix(lasso_coef)
+
+
+selected_vars_lasso <- rownames(lasso_coef)[lasso_coef[,1] != 0 & rownames(lasso_coef) != "(Intercept)"]
+
+X_train_selected_lasso <- X_train[, selected_vars_lasso]
+train_data_lasso <- data.frame(Y_train = Y_train, X_train_selected_lasso)
+
+lm_model_lasso <- lm(Y_train ~ ., data = train_data_lasso)
+
+
+vif_values_lasso <- vif(lm_model_lasso)
+print(vif_values_lasso)
+```
+The Lasso model's coefficients are extracted, and only variables with non-zero coefficients are selected for the VIF analysis. A new linear model is then fitted using these selected predictors to assess multicollinearity through VIF values.
+
+The resulting VIF values show significant improvement compared to the original model and Ridge regression:
+- Most VIF values are now below the critical threshold of 10
+- Variables with strong multicollinearity have been eliminated
+
+This confirms Lasso's effectiveness in addressing multicollinearity through its variable selection property, providing a more interpretable model while maintaining strong predictive performance.
+
+## COMPARISON
+In the model performance comparison, Ridge regression performed better than Lasso with higher R², lower MSE,RMSE and MAE. However, the Ridge model showed multicollinearity issues due to high VIF values. On the other hand, Lasso regression reduced VIF values, making the model more stable and interpretable. Therefore, Lasso was preferred for better interpretability.
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=FALSE}
+rmse_ridge <- sqrt(mse_ridge)
+rmse_lasso <- sqrt(mse_lasso)
+mae_ridge <- mean(abs(Y_test - ridge_pred))
+mae_lasso <- mean(abs(Y_test - lasso_pred))
+
+
+performance_metrics <- data.frame(
+  Model = c("Ridge", "Lasso"),
+  R_Squared = c(r_square_ridge, r_square_lasso),
+  MSE = c(mse_ridge, mse_lasso),
+  RMSE = c(sqrt(mse_ridge), sqrt(mse_lasso)),
+  MAE = c(mae_ridge, mae_lasso)
+)
+
+knitr::kable(performance_metrics, 
+             digits = 6,  
+             format.args = list(scientific = FALSE), 
+             caption = "Model Performance Comparison")
+```
+
+
+### VIF VALUES COMPARISON
+
+The VIF comparison across models clearly demonstrates that Ridge Regression does not address multicollinearity as effectively as the Lasso model. 
+
+- Ridge Regression (blue bars) maintains high VIF values similar to the Classic Linear Model (green bars).
+
+- Lasso Regression (orange bars) significantly reduces VIF values by eliminating some variables and reducing the impact of others, bringing most values below the critical threshold of 10 (shown by the red dashed line).
+
+This comparison illustrates Lasso's performance in addressing multicollinearity through its variable selection property, while Ridge Regression only shrinks coefficients without eliminating problematic variables.
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=FALSE}
+vif_comparison <- data.frame(
+  Variable = names(vif_values),
+  Classic_LM = vif_values,
+  Ridge = NA,
+  Lasso = NA
+)
+
+
+common_vars_ridge <- intersect(names(vif_values_ridge), vif_comparison$Variable)
+vif_comparison$Ridge[match(common_vars_ridge, vif_comparison$Variable)] <- vif_values_ridge[common_vars_ridge]
+
+if(exists("vif_values_lasso") && length(vif_values_lasso) > 0) {
+  common_vars_lasso <- intersect(names(vif_values_lasso), vif_comparison$Variable)
+  vif_comparison$Lasso[match(common_vars_lasso, vif_comparison$Variable)] <- vif_values_lasso[common_vars_lasso]
+}
+
+
+vif_comparison[is.na(vif_comparison)] <- 0
+
+
+vif_long <- tidyr::pivot_longer(vif_comparison, 
+                               cols = c("Classic_LM", "Ridge", "Lasso"),
+                               names_to = "Model", 
+                               values_to = "VIF")
+
+
+ggplot(vif_long, aes(x = Variable, y = VIF, fill = Model)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_hline(yintercept = 10, linetype = "dashed", color = "red") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  labs(title = "VIF Comparison Across Models",
+       x = "Variables",
+       y = "VIF Values") +
+  scale_fill_brewer(palette = "Set2")
+```
+
+### COEFFICIENT COMPARISON
+
+The coefficient comparison highlights the key difference between Ridge and Lasso approaches. While Ridge Regression (blue bars) retains all variables with very small coefficients (barely visible in the plot), Lasso Regression (red bars) sets many coefficients exactly to zero, effectively eliminating less important variables while maintaining stronger coefficients for key predictors like `Mean_BMI_children` and `Prevalence_obesity_children`. This demonstrates Lasso's variable selection capability versus Ridge's coefficient shrinkage approach.
+
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=FALSE}
+
+coef_comparison <- data.frame(
+  Variable = rownames(coef(final_ridge)),
+  Ridge = as.vector(coef(final_ridge)),
+  Lasso = as.vector(coef(final_lasso))
+)
+
+
+coef_comparison <- coef_comparison[-1,]
+
+
+coef_long <- tidyr::pivot_longer(coef_comparison, 
+                                cols = c("Ridge", "Lasso"),
+                                names_to = "Model", 
+                                values_to = "Coefficient")
+
+
+ggplot(coef_long, aes(x = Variable, y = Coefficient, fill = Model)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  labs(title = "Coefficient Comparison: Ridge vs Lasso",
+       x = "Variables",
+       y = "Coefficient Values") +
+  scale_fill_brewer(palette = "Set1")
+
+
+
+```
+
+
+## APPENDIX
+
+### Cross Validation Comparison
+```{r , message=FALSE, eval=TRUE, comment=NA , message=FALSE,echo=TRUE}
+par(mfrow = c(1, 2), oma = c(0, 0, 2, 0))  
+
+plot(cv.ridge, main = "")
+title("Ridge Cross-validation", line = 3)  
+
+plot(cv.lasso, main = "")
+title("Lasso Cross-validation", line = 3)
+
+```
+
+## REFERENCES 
+- [1] M. O. Akinwande, H. G. Dikko, and A. Samson, "Variance Inflation Factor: As a Condition for the Inclusion of Suppressor Variable(s) in Regression Analysis," Scientific Research Open Access. [Online]. Available: https://www.scirp.org/html/11-1240578_62189.htm. [Accessed: Feb. 14, 2025]. 
+ 
+- [2] J. Frost, “Multicollinearity in Regression Analysis: Problems, Detection, and Solutions,” Statistics By Jim, Feb. 2025. [Online]. Available: https://statisticsbyjim.com/regression/multicollinearity-in-regression-analysis/. [Accessed: Feb. 15, 2025].
+
+- [3] “Machine Learning with R Ridge and Lasso Regression Models”, WaveDataLab. [Online]. Available: https://wavedatalab.github.io/machinelearningwithr/post4.html. [Accessed: Feb. 15, 2025]. 
+
+- [4] G.C. McDonald, “Ridge regression,” WIREs Computational Statistics. [Online]. Available: https://wires.onlinelibrary.wiley.com/doi/abs/10.1002/wics.14. [Accessed: Feb. 14, 2025]. 
+
+- [5] Lab 6_linear model selection and regularization.pdf. [Accessed: Feb. 11, 2025]. 
+
