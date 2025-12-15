@@ -44,4 +44,8 @@ regularization techniques, and reproducible analysis using R.
 Open the `.Rmd` file in RStudio and click **Knit**
 to reproduce the analysis and generate the HTML report.
 
+## Note on Output
+
+The rendered HTML and PDF outputs are not included in the repository.
+The full analysis can be reproduced by knitting the provided `.Rmd` file.
 
